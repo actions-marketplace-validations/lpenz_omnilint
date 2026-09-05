@@ -8,6 +8,25 @@
 
 Statically analyse any file with the appropriate tools
 
+## Table of contents
+
+- [Features](#features)
+- [Supported file types and linters](#supported-file-types-and-linters)
+- [Usage](#usage)
+  - [`omnilint files <files...>`](#omnilint-files-files)
+  - [`omnilint repository`](#omnilint-repository)
+  - [`omnilint inventory`](#omnilint-inventory)
+  - [Output format](#output-format)
+  - [Exit status](#exit-status)
+  - [Configuration](#configuration)
+- [Requirements](#requirements)
+- [Installation](#installation)
+  - [From crates.io](#from-cratesio)
+  - [From source](#from-source)
+  - [Prebuilt packages](#prebuilt-packages)
+- [Development](#development)
+- [License](#license)
+
 ## Features
 
 - Detects the file type by extension or shebang and runs the appropriate
@@ -32,9 +51,9 @@ Statically analyse any file with the appropriate tools
 | SQL        | `.sql`                         | [sqlfluff](https://sqlfluff.com/) |
 | Markdown   | `.md`, `.markdown`             | [markdownlint-cli2](https://github.com/DavidAnson/markdownlint-cli2) and [proselint](https://github.com/amperser/proselint) |
 | Nix        | `.nix`                         | [nix-instantiate](https://nixos.org/manual/nix/stable/) and [statix](https://github.com/oppiliappan/statix) |
-| XML        | `.xml`                         | [xmllint](https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home) and a built-in parser |
+| XML        | `.xml`                         | [xmllint](https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home) and a built-in [quick-xml](https://crates.io/crates/quick-xml) parser |
 | HTML       | `.html`, `.htm`                | [tidy](https://www.html-tidy.org/) |
-| JSON       | `.json`                        | [jq](https://jqlang.github.io/jq/) and a built-in parser |
+| JSON       | `.json`                        | [jq](https://jqlang.github.io/jq/) and a built-in [serde_json](https://crates.io/crates/serde_json) parser |
 | C/C++      | `.c`, `.cc`, `.cpp`, `.cxx`, `.h`, `.hh`, `.hpp`, `.hxx` | [cppcheck](https://cppcheck.sourceforge.io/) |
 | Protobuf   | `.proto`                       | [protolint](https://github.com/yoheimuta/protolint) |
 | Go         | `.go`                          | [staticcheck](https://staticcheck.dev/) and [go vet](https://pkg.go.dev/cmd/vet) |
@@ -67,6 +86,19 @@ $ omnilint repository
 src/main.rs:5: [shellcheck] SC2148: Tips depend on target shell and yours is unknown.
 ```
 
+### `omnilint inventory`
+
+Shows the status of all supported linters, one per line, with their mode and
+version when available:
+
+```console
+$ omnilint inventory
+flake8               wanted     3.1.0
+...
+nix-instantiate      wanted     not found
+toml                 wanted     built-in
+```
+
 ### Output format
 
 Findings are printed to stderr in the format:
@@ -85,6 +117,14 @@ is omitted:
 This format is similar to the one used by compilers, and is parseable by most
 editors and IDEs.
 
+Alternatively, `--format github-workflow` emits
+[GitHub Actions workflow commands](https://docs.github.com/en/actions/reference/workflow-commands-for-github-actions)
+so that findings show up directly in the pull request and commit annotations:
+
+```text
+::warning file=<filename>,line=<line>,col=<col>::[<linter>] <message>
+```
+
 ### Exit status
 
 omnilint exits with status `0` when no issues were found, and with status `1`
@@ -98,9 +138,12 @@ $ echo $?
 1
 ```
 
-The `--ignore-missing-linters` flag makes omnilint silently skip linters that
-are not found on the `PATH`, so they are neither reported nor counted for the
-exit status. This can also be enabled by setting the
+By default, omnilint complains about a linter that is not found on the `PATH`
+when a file's type requires it, which makes it exit with status `1`. The
+`--ignore-missing-linters` flag makes omnilint silently skip such linters, so
+they are neither reported nor counted for the exit status; it is equivalent to
+setting the global [linter mode](#configuration) to `optional`. This can also
+be enabled by setting the
 `OMNILINT_IGNORE_MISSING_LINTERS` environment variable to a truthy value
 (`1`, `true`, `yes` or `on`):
 
@@ -133,9 +176,9 @@ following sources, in order of increasing precedence:
 4. `./omnilint.toml` in the current directory
 
 A config file has a `[global]` section for global options such as
-`default_linter_mode` (one of `required`, `wanted`, `optional` or `disabled`),
-and a `[linters.<name>]` section per linter with `mode` and an optional `path`.
-When a per-linter `mode` is not set, the global `default_linter_mode` is used:
+`default_linter_mode`, and a `[linters.<name>]` section per linter with `mode`
+and an optional `path`. When a per-linter `mode` is not set, the global
+`default_linter_mode` is used:
 
 ```toml
 [global]
@@ -148,48 +191,29 @@ mode = "disabled"
 path = "/usr/local/bin/ruff"
 ```
 
+The same effect can be achieved without a config file by passing the
+`--default-linter-mode <mode>` flag:
+
+```console
+$ omnilint --default-linter-mode optional files test.py
+```
+
+The linter modes control how a linter that is not found on the `PATH` is
+handled:
+
+- `required`: abort with an error
+- `wanted` (the default when nothing is set): emit a finding for the missing
+  linter, counted for the exit status
+- `optional`: run the linter if available, silently skip it otherwise
+- `disabled`: never run the linter, even if the binary is available
+
 ## Requirements
 
 The underlying linters must be installed for omnilint to analyse the
-corresponding file types. When a linter is not found on the `PATH`, omnilint
-does not abort; instead, it emits an entry saying that the linter was not
-found:
-
-```text
-<filename>: [<linter>] linter not found
-```
-
-The linters used are:
-
-- `flake8`, `mypy`, `py_compile`, `pylint`, `pyright` and `ruff` for Python
-- `yamllint` for YAML, and `actionlint` for GitHub Actions workflow files
-  (under `.github/workflows/`)
-- `shellcheck` for Shell
-- `luacheck` for Lua
-- `perlcritic` for Perl
-- `clj-kondo` for Clojure
-- `hadolint` for Dockerfile
-- `ktlint` for Kotlin
-- `swiftlint` for Swift
-- `sqlfluff` for SQL
-- `markdownlint-cli2` and `proselint` for Markdown
-- `statix` for Nix
-- `nix-instantiate` for Nix syntax checking
-- `xmllint` for XML, plus a built-in [quick-xml](https://crates.io/crates/quick-xml) parser
-- `tidy` for HTML
-- `jq` for JSON, plus a built-in [serde_json](https://crates.io/crates/serde_json) parser
-- `cppcheck` for C/C++
-- `protolint` for Protobuf
-- `staticcheck` and `go vet` for Go
-- `rubocop` for Ruby
-- `stylelint` for CSS
-- `chktex` for TeX/LaTeX
-- `oxlint` and `eslint` for JavaScript, `oxlint` for TypeScript. eslint only
-  reports findings when an [eslint configuration file](https://eslint.org/docs/latest/use/configure/)
-  is present in the directory tree
-- `systemd-analyze verify` for systemd unit files
-- a built-in [toml](https://crates.io/crates/toml) parser for TOML, requiring
-  no external tool
+corresponding file types. How missing linters are handled depends on the
+configurable [linter mode](#configuration). See the
+[supported file types and linters](#supported-file-types-and-linters) table
+for the complete list.
 
 ## Installation
 
