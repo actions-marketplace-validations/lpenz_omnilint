@@ -1,0 +1,76 @@
+---
+name: omnilint
+description: >
+  Statically analyse all files in the repository with the appropriate tools.
+  Runs omnilint with every supported linter pinned by the nix flake of the
+  omnilint repository at the referenced version, and reports findings as
+  GitHub workflow annotations.
+branding:
+  icon: 'check-circle'
+  color: 'green'
+inputs:
+  arguments:
+    description: >
+      Extra arguments passed to omnilint, e.g. "--config omnilint.toml".
+    required: false
+    default: ""
+  ref:
+    description: >
+      Reference (tag, branch or commit) of the lpenz/omnilint repository to
+      use. Defaults to the ref the action itself was called from.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Set up nix
+      uses: cachix/install-nix-action@v31.11.1
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+        extra_nix_config: |
+          access-tokens = github.com=${{ github.token }}
+    - name: Set up the lpenz cachix cache
+      uses: cachix/cachix-action@v17
+      with:
+        name: lpenz
+        skipPush: true
+    - name: Resolve omnilint ref
+      id: ref
+      shell: bash
+      run: |
+        ref="${{ inputs.ref }}"
+        : "${ref:=${{ github.action_ref }}}"
+        : "${ref:=main}"
+        echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
+    - name: Resolve nix system
+      id: system
+      shell: bash
+      run: |
+        case "${{ runner.os }}" in
+          Linux) os="linux" ;;
+          macOS) os="darwin" ;;
+          *) echo "unsupported runner OS: ${{ runner.os }}" >&2; exit 2 ;;
+        esac
+        case "${{ runner.arch }}" in
+          X64) arch="x86_64" ;;
+          ARM64) arch="aarch64" ;;
+          *) echo "unsupported runner arch: ${{ runner.arch }}" >&2; exit 2 ;;
+        esac
+        echo "system=${arch}-${os}" >> "${GITHUB_OUTPUT}"
+    - name: Run omnilint
+      env:
+        ARGS: ${{ inputs.arguments }}
+        REF: ${{ steps.ref.outputs.ref }}
+        SYSTEM: ${{ steps.system.outputs.system }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=()
+        if [[ -n "${ARGS}" ]]; then
+          read -r -a args <<< "${ARGS}"
+        fi
+        nix --extra-experimental-features "nix-command flakes" shell \
+          "github:lpenz/omnilint@${REF}#packages.${SYSTEM}.default" \
+          --command omnilint \
+          --format github-workflow \
+          repository "${args[@]}"

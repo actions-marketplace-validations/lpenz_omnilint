@@ -1,0 +1,60 @@
+---
+# Copyright (C) 2026 Leandro Lisboa Penz <lpenz@lpenz.org>
+# This file is subject to the terms and conditions defined in
+# file 'LICENSE', which is part of this source code package.
+name: omnilint
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
+    inputs:
+      arguments:
+        description: >
+          Extra arguments passed to omnilint, e.g. the flag
+          "--config omnilint.toml".
+        required: false
+        type: string
+        default: ""
+permissions:
+  contents: read
+jobs:
+  omnilint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: cachix/install-nix-action@v31.11.1
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            access-tokens = github.com=${{ github.token }}
+      - name: Set up the lpenz cachix cache
+        uses: cachix/cachix-action@v17
+        with:
+          name: lpenz
+          skipPush: true
+      - name: Resolve omnilint ref
+        id: ref
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          ref="${WORKFLOW_REF##*@}"
+          if [[ "${ref}" == "${WORKFLOW_REF}" ]]; then
+            ref="main"
+          fi
+          ref="${ref#refs/heads/}"
+          ref="${ref#refs/tags/}"
+          echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
+      - name: Run omnilint
+        env:
+          ARGS: ${{ inputs.arguments }}
+          REF: ${{ steps.ref.outputs.ref }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "${ARGS}" ]]; then
+            read -r -a args <<< "${ARGS}"
+          fi
+          nix --extra-experimental-features "nix-command flakes" shell \
+            "github:lpenz/omnilint@${REF}#packages.x86_64-linux.default" \
+            --command omnilint \
+            --format github-workflow \
+            repository "${args[@]}"
